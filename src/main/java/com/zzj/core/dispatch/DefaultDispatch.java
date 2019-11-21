@@ -93,6 +93,12 @@ public class DefaultDispatch extends HttpServlet {
         if (values != null && values.length == 1) {
             value = values[0];
         } else {
+            if (clazz == Boolean.TYPE) {
+                return false;
+            }
+            if (clazz == Byte.TYPE || clazz == Short.TYPE || clazz == Integer.TYPE || clazz == Long.TYPE || clazz == Float.TYPE || clazz == Double.TYPE) {
+                return 0;
+            }
             return null;
         }
         if (clazz == Boolean.TYPE || clazz == Boolean.class) {

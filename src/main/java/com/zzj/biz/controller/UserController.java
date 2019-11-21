@@ -10,8 +10,8 @@ public class UserController {
     private UserService userService;
 
     @GetMapping("/getUser")
-    public String getUser(@RequestParam("name") String name,Integer id){
-        System.out.println(name+":"+id);
+    public String getUser(@RequestParam("name") String name,long id){
+        System.out.println(id+":"+name);
         return name;
     }
 }
