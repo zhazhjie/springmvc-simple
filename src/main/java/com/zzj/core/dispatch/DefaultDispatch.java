@@ -82,6 +82,14 @@ public class DefaultDispatch extends HttpServlet {
         }
     }
 
+    /**
+     * 参数值类型转换
+     * @param clazz
+     * @param values
+     * @param req
+     * @param resp
+     * @return
+     */
     private Object convertValue(Class clazz, String[] values, HttpServletRequest req, HttpServletResponse resp) {
         if (clazz == HttpServletRequest.class) {
             return req;
