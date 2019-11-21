@@ -1,7 +1,7 @@
 package com.zzj.core.dispatch;
 
 import com.zzj.core.annotation.*;
-import com.zzj.core.exception.WebException;
+import com.zzj.core.constant.RequestMethod;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -17,71 +17,154 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URL;
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
 
 public class DefaultDispatch extends HttpServlet {
-    private static Map<Object, Object> ioc = new HashMap<>();
+    private static String packagePath = "";
     private static Properties properties = new Properties();
+    private static Map<Class, Object> ioc = new HashMap<>();
     private static Map<String, MethodHandler> methodHandlerMap = new HashMap<>();
-    private static List<Annotation> mappingAnnoList = new ArrayList<>();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        doDispatch(req,resp);
+        doDispatch(req, resp);
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        super.doPost(req, resp);
+        doDispatch(req, resp);
     }
 
     @Override
     public void init(ServletConfig config) throws ServletException {
         super.init(config);
         initConfig(config.getInitParameter("appProperties"));
-        scanPackage(properties.getProperty("package").replaceAll("\\.", "/"));
+        scanPackage(packagePath);
         doAutowired();
         mappingPathToHandler();
-
     }
 
-    private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws IOException{
+    /**
+     * 处理请求
+     *
+     * @param req
+     * @param resp
+     * @throws IOException
+     */
+    private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        if (!requestPreCheck(req, resp)) return;
         String requestURI = req.getRequestURI();
         MethodHandler methodHandler = methodHandlerMap.get(requestURI);
-        if(methodHandler==null){
-            resp.setStatus(404);
-            PrintWriter writer = resp.getWriter();
-            writer.print("404 not fund");
-//            throw new WebException("404 not fund");
-        }
         Method method = methodHandler.getMethod();
+        Map<String, String[]> parameterMap = req.getParameterMap();
         try {
             Parameter[] parameters = method.getParameters();
-            Arrays.stream(parameters).forEach(parameter -> {
-
-            });
-            method.invoke(methodHandler.getInstance(),parameters);
-        }catch (Exception e){
-
+            Object[] args = new Object[parameters.length];
+            for (int i = 0; i < parameters.length; i++) {
+                Parameter parameter = parameters[i];
+                Class<?> paramClazz = parameter.getType();
+                RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
+                String paramName = requestParam != null ? requestParam.value() : parameter.getName();
+                String[] values = parameterMap.get(paramName);
+                args[i] = convertValue(paramClazz, values, req, resp);
+            }
+            Object invoke = method.invoke(methodHandler.getInstance(), args);
+            PrintWriter writer = resp.getWriter();
+            writer.print(invoke);
+            writer.close();
+        } catch (Exception e) {
+            e.printStackTrace();
         }
+    }
 
+    private Object convertValue(Class clazz, String[] values, HttpServletRequest req, HttpServletResponse resp) {
+        if (clazz == HttpServletRequest.class) {
+            return req;
+        }
+        if (clazz == HttpServletResponse.class) {
+            return resp;
+        }
+        String value;
+        if (values != null && values.length == 1) {
+            value = values[0];
+        } else {
+            return null;
+        }
+        if (clazz == Boolean.TYPE || clazz == Boolean.class) {
+            return Boolean.valueOf(value);
+        }
+        if (clazz == Byte.TYPE || clazz == Byte.class) {
+            return Byte.valueOf(value);
+        }
+        if (clazz == Short.TYPE || clazz == Short.class) {
+            return Short.valueOf(value);
+        }
+        if (clazz == Integer.TYPE || clazz == Integer.class) {
+            return Integer.valueOf(value);
+        }
+        if (clazz == Long.TYPE || clazz == Long.class) {
+            return Long.valueOf(value);
+        }
+        if (clazz == Float.TYPE || clazz == Float.class) {
+            return Float.valueOf(value);
+        }
+        if (clazz == Double.TYPE || clazz == Double.class) {
+            return Double.valueOf(value);
+        }
+        if (clazz == String.class) {
+            return String.valueOf(value);
+        }
+        return null;
+    }
+
+    /**
+     * 请求前置检查
+     *
+     * @param req
+     * @param resp
+     * @return
+     * @throws IOException
+     */
+    private boolean requestPreCheck(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String requestURI = req.getRequestURI();
+        MethodHandler methodHandler = methodHandlerMap.get(requestURI);
+        //判断请求路径是否有对应的handler
+        if (methodHandler == null) {
+            resp.sendError(HttpServletResponse.SC_NOT_FOUND, "404 NOT FOUND");
+            return false;
+        }
+        String curMethod = req.getMethod().toUpperCase();
+        RequestMethod[] requestMethods = methodHandler.getRequestMethod();
+        boolean matchMethod = Arrays.stream(requestMethods).anyMatch(requestMethod -> requestMethod.toString().equals(curMethod));
+        //判断请求方法
+        if (!matchMethod) {
+            resp.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED, curMethod + " METHOD NOT ALLOWED");
+            return false;
+        }
+        return true;
     }
 
     /**
      * 初始化配置
+     *
      * @param appProperties
      */
     private void initConfig(String appProperties) {
         InputStream resourceAsStream = this.getClass().getClassLoader().getResourceAsStream(appProperties);
         try {
             properties.load(resourceAsStream);
+            packagePath = properties.getProperty("package").replaceAll("\\.", "/");
         } catch (IOException e) {
-
+            e.printStackTrace();
         }
     }
 
     /**
      * 扫描包下所有Bean
+     *
      * @param packagePath
      */
     private void scanPackage(String packagePath) {
@@ -103,6 +186,7 @@ public class DefaultDispatch extends HttpServlet {
 
     /**
      * 递归查找目标注解
+     *
      * @param source
      * @param annotationClass
      * @param <T>
@@ -136,28 +220,26 @@ public class DefaultDispatch extends HttpServlet {
 
     /**
      * 实例化Bean
+     *
      * @param className
      */
     private void instanceBean(String className) {
         try {
             Class<?> clazz = Class.forName(className);
-            Object instance = clazz.newInstance();
             Component component = getAnnotation(clazz, Component.class);
+            //包含@Component注解的添加到ico容器
             if (component != null) {
+                Object instance = clazz.newInstance();
+                //按类型存
                 ioc.put(clazz, instance);
                 Class<?>[] interfaces = clazz.getInterfaces();
-                Arrays.stream(interfaces).forEach(item -> {
-                    ioc.put(item, instance);
+                Arrays.stream(interfaces).forEach(interfaceClazz -> {
+                    ioc.put(interfaceClazz, instance);
                 });
             }
-
         } catch (Exception e) {
-
+            e.printStackTrace();
         }
-    }
-
-    private String toCamelBak(String name) {
-        return name.substring(0, 1).toLowerCase() + name.substring(1);
     }
 
     /**
@@ -167,16 +249,16 @@ public class DefaultDispatch extends HttpServlet {
         ioc.forEach((key, instance) -> {
             Field[] fields = instance.getClass().getDeclaredFields();
             Arrays.stream(fields).forEach(field -> {
-                boolean annotationPresent = field.isAnnotationPresent(Autowired.class);
-                if (annotationPresent) {
+                boolean needAutowired = field.isAnnotationPresent(Autowired.class);
+                if (needAutowired) {
                     try {
                         field.setAccessible(true);
                         Class<?> type = field.getType();
+                        //按类型装配
                         field.set(instance, ioc.get(type));
                     } catch (IllegalAccessException e) {
-
+                        e.printStackTrace();
                     }
-
                 }
             });
         });
@@ -193,26 +275,52 @@ public class DefaultDispatch extends HttpServlet {
                 String basePath = getBasePath(clazz);
                 Method[] declaredMethods = clazz.getDeclaredMethods();
                 Arrays.stream(declaredMethods).forEach(method -> {
-                    setPathMapping(instance, method, basePath);
+                    buildMethodHandler(instance, method, basePath);
                 });
             }
         });
     }
 
-    private void setPathMapping(Object instance, Method method, String basePath) {
-        MethodHandler methodHandler = new MethodHandler();
+    /**
+     * 生成具体路径对应的handler
+     * @param instance
+     * @param method
+     * @param basePath
+     */
+    private void buildMethodHandler(Object instance, Method method, String basePath) {
         RequestMapping requestMapping = getAnnotation(method, RequestMapping.class);
+        if (requestMapping == null) return;
+        MethodHandler methodHandler = new MethodHandler();
         methodHandler.setRequestMethod(requestMapping.method());
         methodHandler.setInstance(instance);
         methodHandler.setMethod(method);
-        methodHandler.setPath(basePath + requestMapping.value());
-        methodHandler.setHandleFlag(true);
+        methodHandler.setPath(basePath + requestMapping.value() + getMappingPath(method));
+        methodHandlerMap.put(methodHandler.getPath(), methodHandler);
     }
 
+    /**
+     * 获取基准路径
+     * @param clazz
+     * @return
+     */
     private String getBasePath(Class<?> clazz) {
         RequestMapping requestMapping = clazz.getAnnotation(RequestMapping.class);
-        requestMapping.annotationType();
         return requestMapping.value();
+    }
+
+    /**
+     * 获取具体路径
+     * @param method
+     * @return
+     */
+    private String getMappingPath(Method method) {
+        RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
+        if (requestMapping != null) return requestMapping.value();
+        GetMapping getMapping = method.getAnnotation(GetMapping.class);
+        if (getMapping != null) return getMapping.value();
+        PostMapping postMapping = method.getAnnotation(PostMapping.class);
+        if (postMapping != null) return postMapping.value();
+        return "";
     }
 
 }

@@ -42,6 +42,8 @@
                     <target>${maven.compiler.target}</target>
                     <source>${maven.compiler.source}</source>
                     <encoding>${project.build.sourceEncoding}</encoding>
+                    <compilerArgument>-parameters</compilerArgument>
+                    <parameters>true</parameters>
                 </configuration>
             </plugin>
             <!--<plugin>-->

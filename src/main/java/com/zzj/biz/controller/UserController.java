@@ -1,9 +1,6 @@
 package com.zzj.biz.controller;
 
-import com.zzj.core.annotation.Autowired;
-import com.zzj.core.annotation.Controller;
-import com.zzj.core.annotation.GetMapping;
-import com.zzj.core.annotation.RequestMapping;
+import com.zzj.core.annotation.*;
 import com.zzj.biz.service.UserService;
 
 @Controller
@@ -13,7 +10,8 @@ public class UserController {
     private UserService userService;
 
     @GetMapping("/getUser")
-    public void getUser(){
-
+    public String getUser(@RequestParam("name") String name,Integer id){
+        System.out.println(name+":"+id);
+        return name;
     }
 }
