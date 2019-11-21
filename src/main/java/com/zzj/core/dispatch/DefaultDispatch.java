@@ -59,10 +59,11 @@ public class DefaultDispatch extends HttpServlet {
         String requestURI = req.getRequestURI();
         MethodHandler methodHandler = methodHandlerMap.get(requestURI);
         Method method = methodHandler.getMethod();
-        Map<String, String[]> parameterMap = req.getParameterMap();
         try {
+            Map<String, String[]> parameterMap = req.getParameterMap();
             Parameter[] parameters = method.getParameters();
             Object[] args = new Object[parameters.length];
+            //填充参数
             for (int i = 0; i < parameters.length; i++) {
                 Parameter parameter = parameters[i];
                 Class<?> paramClazz = parameter.getType();
@@ -71,6 +72,7 @@ public class DefaultDispatch extends HttpServlet {
                 String[] values = parameterMap.get(paramName);
                 args[i] = convertValue(paramClazz, values, req, resp);
             }
+            //调用对应controller
             Object invoke = method.invoke(methodHandler.getInstance(), args);
             PrintWriter writer = resp.getWriter();
             writer.print(invoke);
@@ -136,10 +138,10 @@ public class DefaultDispatch extends HttpServlet {
             resp.sendError(HttpServletResponse.SC_NOT_FOUND, "404 NOT FOUND");
             return false;
         }
+        //判断请求方法是否支持
         String curMethod = req.getMethod().toUpperCase();
         RequestMethod[] requestMethods = methodHandler.getRequestMethod();
         boolean matchMethod = Arrays.stream(requestMethods).anyMatch(requestMethod -> requestMethod.toString().equals(curMethod));
-        //判断请求方法
         if (!matchMethod) {
             resp.sendError(HttpServletResponse.SC_METHOD_NOT_ALLOWED, curMethod + " METHOD NOT ALLOWED");
             return false;
@@ -283,6 +285,7 @@ public class DefaultDispatch extends HttpServlet {
 
     /**
      * 生成具体路径对应的handler
+     *
      * @param instance
      * @param method
      * @param basePath
@@ -300,6 +303,7 @@ public class DefaultDispatch extends HttpServlet {
 
     /**
      * 获取基准路径
+     *
      * @param clazz
      * @return
      */
@@ -310,6 +314,7 @@ public class DefaultDispatch extends HttpServlet {
 
     /**
      * 获取具体路径
+     *
      * @param method
      * @return
      */
