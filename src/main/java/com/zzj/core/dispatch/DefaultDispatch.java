@@ -21,7 +21,10 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URL;
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
 
 public class DefaultDispatch extends HttpServlet {
     private static String PACKAGE_PATH = "";
@@ -130,7 +133,7 @@ public class DefaultDispatch extends HttpServlet {
                 }
             } else {
                 RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
-                String paramName = requestParam != null ? requestParam.value() : parameter.getName();
+                String paramName = requestParam != null&&!requestParam.value().equals("") ? requestParam.value() : parameter.getName();
                 if (paramClazz == HttpServletRequest.class) {
                     args[i] = req;
                 } else if (paramClazz == HttpServletResponse.class) {
@@ -217,7 +220,7 @@ public class DefaultDispatch extends HttpServlet {
      * @param <T>
      * @return
      */
-    public static <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClazz) {
+    private static <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClazz) {
         T targetAnnotation = null;
         Annotation[] annotations = new Annotation[]{};
         if (source instanceof Class) {
@@ -237,6 +240,7 @@ public class DefaultDispatch extends HttpServlet {
             return targetAnnotation;
         }
         for (Annotation annotation : annotations) {
+            //跳过元注解
             if (annotation instanceof Documented || annotation instanceof Target || annotation instanceof Retention) {
                 continue;
             }
@@ -261,6 +265,7 @@ public class DefaultDispatch extends HttpServlet {
                 //按类型存
                 IOC.put(clazz, instance);
                 Class<?>[] interfaces = clazz.getInterfaces();
+                //把对应的接口类型也存进去
                 Arrays.stream(interfaces).forEach(interfaceClazz -> {
                     IOC.put(interfaceClazz, instance);
                 });
