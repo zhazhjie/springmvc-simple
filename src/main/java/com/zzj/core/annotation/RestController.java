@@ -8,6 +8,5 @@ import java.lang.annotation.*;
 @Controller
 @ResponseBody
 public @interface RestController {
-    @AliasFor(annotation = Controller.class)
     String value() default "";
 }

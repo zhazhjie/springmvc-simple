@@ -7,6 +7,5 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 @Component
 public @interface Controller {
-    @AliasFor(annotation = Component.class)
     String value() default "";
 }

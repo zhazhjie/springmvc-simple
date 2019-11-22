@@ -21,10 +21,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URL;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 
 public class DefaultDispatch extends HttpServlet {
     private static String PACKAGE_PATH = "";
@@ -370,6 +367,10 @@ public class DefaultDispatch extends HttpServlet {
         if (getMapping != null) return getMapping.value();
         PostMapping postMapping = method.getAnnotation(PostMapping.class);
         if (postMapping != null) return postMapping.value();
+        PutMapping putMapping = method.getAnnotation(PutMapping.class);
+        if (putMapping != null) return putMapping.value();
+        DeleteMapping deleteMapping = method.getAnnotation(DeleteMapping.class);
+        if (deleteMapping != null) return deleteMapping.value();
         return "";
     }
 
