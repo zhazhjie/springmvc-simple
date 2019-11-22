@@ -1,21 +1,27 @@
 package com.zzj.core.dispatch;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
 import com.zzj.core.annotation.*;
 import com.zzj.core.constant.RequestMethod;
+import com.zzj.core.constant.ResponseType;
+import com.zzj.core.exception.WebException;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
+import javax.servlet.ServletInputStream;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.PrintWriter;
+import java.io.*;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.Documented;
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.math.BigDecimal;
 import java.net.URL;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -23,10 +29,11 @@ import java.util.Map;
 import java.util.Properties;
 
 public class DefaultDispatch extends HttpServlet {
-    private static String packagePath = "";
-    private static Properties properties = new Properties();
-    private static Map<Class, Object> ioc = new HashMap<>();
-    private static Map<String, MethodHandler> methodHandlerMap = new HashMap<>();
+    private static String PACKAGE_PATH = "";
+    private static String VIEW_PATH = "";
+    private static Properties PROPERTIES = new Properties();
+    private static Map<Class, Object> IOC = new HashMap<>();
+    private static Map<String, MethodHandler> METHOD_HANDLER_MAP = new HashMap<>();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -42,9 +49,10 @@ public class DefaultDispatch extends HttpServlet {
     public void init(ServletConfig config) throws ServletException {
         super.init(config);
         initConfig(config.getInitParameter("appProperties"));
-        scanPackage(packagePath);
+        scanPackage(PACKAGE_PATH);
         doAutowired();
         mappingPathToHandler();
+
     }
 
     /**
@@ -57,87 +65,91 @@ public class DefaultDispatch extends HttpServlet {
     private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         if (!requestPreCheck(req, resp)) return;
         String requestURI = req.getRequestURI();
-        MethodHandler methodHandler = methodHandlerMap.get(requestURI);
+        MethodHandler methodHandler = METHOD_HANDLER_MAP.get(requestURI);
         Method method = methodHandler.getMethod();
         try {
-            Map<String, String[]> parameterMap = req.getParameterMap();
-            Parameter[] parameters = method.getParameters();
-            Object[] args = new Object[parameters.length];
             //填充参数
-            for (int i = 0; i < parameters.length; i++) {
-                Parameter parameter = parameters[i];
-                Class<?> paramClazz = parameter.getType();
-                RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
-                String paramName = requestParam != null ? requestParam.value() : parameter.getName();
-                String[] values = parameterMap.get(paramName);
-                args[i] = convertValue(paramClazz, values, req, resp);
-            }
+            Object[] args = fillParams(method.getParameters(), req, resp);
             //调用对应controller
             Object invoke = method.invoke(methodHandler.getInstance(), args);
-            PrintWriter writer = resp.getWriter();
-            writer.print(invoke);
-            writer.close();
+            if (methodHandler.getResponseType() == ResponseType.VIEW) {
+                req.getRequestDispatcher(VIEW_PATH + invoke.toString() + ".jsp").forward(req, resp);
+            } else {
+                PrintWriter writer = resp.getWriter();
+                writer.print(JSON.toJSONString(invoke));
+                writer.close();
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
     /**
-     * 参数值类型转换
-     * @param clazz
-     * @param values
+     * 填充参数
+     *
+     * @param parameters
      * @param req
      * @param resp
      * @return
+     * @throws IOException
      */
-    private Object convertValue(Class clazz, String[] values, HttpServletRequest req, HttpServletResponse resp) {
-        if (clazz == HttpServletRequest.class) {
-            return req;
-        }
-        if (clazz == HttpServletResponse.class) {
-            return resp;
-        }
-        String value;
-        if (values != null && values.length == 1) {
-            value = values[0];
-        } else {
-            if (clazz == Boolean.TYPE) {
-                return false;
+    private Object[] fillParams(Parameter[] parameters, HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        JSONObject params = new JSONObject();
+        JSONObject data = new JSONObject();
+        Map<String, String[]> parameterMap = req.getParameterMap();
+        parameterMap.forEach((key, value) -> {
+            if (value != null && value.length == 1) {
+                params.put(key, value[0]);
+            } else {
+                params.put(key, value);
             }
-            if (clazz == Byte.TYPE || clazz == Short.TYPE || clazz == Integer.TYPE || clazz == Long.TYPE || clazz == Float.TYPE || clazz == Double.TYPE) {
-                return 0;
+        });
+        //获取json数据
+        if (req.getContentType() != null && req.getContentType().equals("application/json")) {
+            BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(req.getInputStream()));
+            String line;
+            StringBuilder stringBuilder = new StringBuilder();
+            while ((line = bufferedReader.readLine()) != null) {
+                stringBuilder.append(line);
             }
-            return null;
+            data = JSON.parseObject(stringBuilder.toString(), JSONObject.class);
         }
-        if (clazz == Boolean.TYPE || clazz == Boolean.class) {
-            return Boolean.valueOf(value);
+        Object[] args = new Object[parameters.length];
+        for (int i = 0; i < parameters.length; i++) {
+            Parameter parameter = parameters[i];
+            Class<?> paramClazz = parameter.getType();
+            RequestBody requestBody = parameter.getAnnotation(RequestBody.class);
+            //有@RequestBody注解尝试用json数据填充
+            if (requestBody != null) {
+                try {
+                    Object instance = paramClazz.newInstance();
+                    Field[] declaredFields = paramClazz.getDeclaredFields();
+                    for (Field field : declaredFields) {
+                        field.setAccessible(true);
+                        Object param = data.getObject(field.getName(), field.getType());
+                        field.set(instance, param);
+                    }
+                    args[i] = instance;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            } else {
+                RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
+                String paramName = requestParam != null ? requestParam.value() : parameter.getName();
+                if (paramClazz == HttpServletRequest.class) {
+                    args[i] = req;
+                } else if (paramClazz == HttpServletResponse.class) {
+                    args[i] = resp;
+                } else {
+                    args[i] = params.getObject(paramName, parameter.getType());
+                }
+            }
         }
-        if (clazz == Byte.TYPE || clazz == Byte.class) {
-            return Byte.valueOf(value);
-        }
-        if (clazz == Short.TYPE || clazz == Short.class) {
-            return Short.valueOf(value);
-        }
-        if (clazz == Integer.TYPE || clazz == Integer.class) {
-            return Integer.valueOf(value);
-        }
-        if (clazz == Long.TYPE || clazz == Long.class) {
-            return Long.valueOf(value);
-        }
-        if (clazz == Float.TYPE || clazz == Float.class) {
-            return Float.valueOf(value);
-        }
-        if (clazz == Double.TYPE || clazz == Double.class) {
-            return Double.valueOf(value);
-        }
-        if (clazz == String.class) {
-            return String.valueOf(value);
-        }
-        return null;
+        return args;
     }
 
     /**
-     * 请求前置检查
+     * 请求前置拦截
      *
      * @param req
      * @param resp
@@ -146,7 +158,7 @@ public class DefaultDispatch extends HttpServlet {
      */
     private boolean requestPreCheck(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         String requestURI = req.getRequestURI();
-        MethodHandler methodHandler = methodHandlerMap.get(requestURI);
+        MethodHandler methodHandler = METHOD_HANDLER_MAP.get(requestURI);
         //判断请求路径是否有对应的handler
         if (methodHandler == null) {
             resp.sendError(HttpServletResponse.SC_NOT_FOUND, "404 NOT FOUND");
@@ -169,17 +181,18 @@ public class DefaultDispatch extends HttpServlet {
      * @param appProperties
      */
     private void initConfig(String appProperties) {
-        InputStream resourceAsStream = this.getClass().getClassLoader().getResourceAsStream(appProperties);
         try {
-            properties.load(resourceAsStream);
-            packagePath = properties.getProperty("package").replaceAll("\\.", "/");
+            InputStream resourceAsStream = this.getClass().getClassLoader().getResourceAsStream(appProperties);
+            PROPERTIES.load(resourceAsStream);
+            PACKAGE_PATH = PROPERTIES.getProperty("packageName").replaceAll("\\.", "/");
+            VIEW_PATH = PROPERTIES.getProperty("viewPath");
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
     /**
-     * 扫描包下所有Bean
+     * 扫描包下所有类
      *
      * @param packagePath
      */
@@ -195,7 +208,8 @@ public class DefaultDispatch extends HttpServlet {
                 this.scanPackage(packagePath + "/" + subFile.getName());
             }
         } else {
-            this.instanceBean(packagePath.replace(".class", "").replace("/", "."));
+            if (packagePath.endsWith(".class"))
+                this.instanceBean(packagePath.replace(".class", "").replace("/", "."));
         }
 
     }
@@ -204,32 +218,35 @@ public class DefaultDispatch extends HttpServlet {
      * 递归查找目标注解
      *
      * @param source
-     * @param annotationClass
+     * @param annotationClazz
      * @param <T>
      * @return
      */
-    public static <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClass) {
+    public static <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClazz) {
         T targetAnnotation = null;
         Annotation[] annotations = new Annotation[]{};
         if (source instanceof Class) {
             Class<?> clazz = (Class<?>) source;
-            targetAnnotation = clazz.getAnnotation(annotationClass);
+            targetAnnotation = clazz.getAnnotation(annotationClazz);
             annotations = clazz.getAnnotations();
         } else if (source instanceof Field) {
             Field field = (Field) source;
-            targetAnnotation = field.getAnnotation(annotationClass);
+            targetAnnotation = field.getAnnotation(annotationClazz);
             annotations = field.getAnnotations();
         } else if (source instanceof Method) {
             Method method = (Method) source;
-            targetAnnotation = method.getAnnotation(annotationClass);
+            targetAnnotation = method.getAnnotation(annotationClazz);
             annotations = method.getAnnotations();
         }
         if (targetAnnotation != null) {
             return targetAnnotation;
         }
         for (Annotation annotation : annotations) {
+            if (annotation instanceof Documented || annotation instanceof Target || annotation instanceof Retention) {
+                continue;
+            }
             Class<? extends Annotation> annotationType = annotation.annotationType();
-            return getAnnotation(annotationType, annotationClass);
+            return getAnnotation(annotationType, annotationClazz);
         }
         return null;
     }
@@ -243,14 +260,14 @@ public class DefaultDispatch extends HttpServlet {
         try {
             Class<?> clazz = Class.forName(className);
             Component component = getAnnotation(clazz, Component.class);
-            //包含@Component注解的添加到ico容器
+            //包含@Component注解的类实例添加到ico容器
             if (component != null) {
                 Object instance = clazz.newInstance();
                 //按类型存
-                ioc.put(clazz, instance);
+                IOC.put(clazz, instance);
                 Class<?>[] interfaces = clazz.getInterfaces();
                 Arrays.stream(interfaces).forEach(interfaceClazz -> {
-                    ioc.put(interfaceClazz, instance);
+                    IOC.put(interfaceClazz, instance);
                 });
             }
         } catch (Exception e) {
@@ -262,16 +279,20 @@ public class DefaultDispatch extends HttpServlet {
      * 执行自动装配
      */
     private void doAutowired() {
-        ioc.forEach((key, instance) -> {
+        IOC.forEach((key, instance) -> {
             Field[] fields = instance.getClass().getDeclaredFields();
             Arrays.stream(fields).forEach(field -> {
-                boolean needAutowired = field.isAnnotationPresent(Autowired.class);
-                if (needAutowired) {
+                Autowired autowired = field.getAnnotation(Autowired.class);
+                if (autowired != null) {
                     try {
                         field.setAccessible(true);
                         Class<?> type = field.getType();
                         //按类型装配
-                        field.set(instance, ioc.get(type));
+                        Object bean = IOC.get(type);
+                        if (autowired.required() && bean == null) {
+                            throw new WebException("Can not found the bean with type "+type);
+                        }
+                        field.set(instance, bean);
                     } catch (IllegalAccessException e) {
                         e.printStackTrace();
                     }
@@ -284,35 +305,47 @@ public class DefaultDispatch extends HttpServlet {
      * 映射请求路径到具体方法
      */
     private void mappingPathToHandler() {
-        ioc.forEach((key, instance) -> {
+        IOC.forEach((key, instance) -> {
             Class<?> clazz = instance.getClass();
-            boolean isController = clazz.isAnnotationPresent(Controller.class);
-            if (isController) {
+            Controller controller = getAnnotation(clazz, Controller.class);
+            if (controller != null) {
                 String basePath = getBasePath(clazz);
                 Method[] declaredMethods = clazz.getDeclaredMethods();
                 Arrays.stream(declaredMethods).forEach(method -> {
-                    buildMethodHandler(instance, method, basePath);
+                    buildMethodHandler(clazz, instance, method, basePath);
                 });
             }
         });
     }
 
     /**
-     * 生成具体路径对应的handler
+     * 生成请求路径对应的handler
      *
      * @param instance
      * @param method
      * @param basePath
      */
-    private void buildMethodHandler(Object instance, Method method, String basePath) {
+    private void buildMethodHandler(Class clazz, Object instance, Method method, String basePath) {
         RequestMapping requestMapping = getAnnotation(method, RequestMapping.class);
         if (requestMapping == null) return;
         MethodHandler methodHandler = new MethodHandler();
         methodHandler.setRequestMethod(requestMapping.method());
         methodHandler.setInstance(instance);
         methodHandler.setMethod(method);
-        methodHandler.setPath(basePath + requestMapping.value() + getMappingPath(method));
-        methodHandlerMap.put(methodHandler.getPath(), methodHandler);
+        methodHandler.setPath(basePath + getMappingPath(method));
+        methodHandler.setResponseType(getResponseType(clazz, method));
+        METHOD_HANDLER_MAP.put(methodHandler.getPath(), methodHandler);
+    }
+
+    /**
+     * 请求的返回类型
+     *
+     * @param clazz
+     * @param method
+     * @return
+     */
+    private ResponseType getResponseType(Class clazz, Method method) {
+        return getAnnotation(clazz, ResponseBody.class) != null || getAnnotation(method, ResponseBody.class) != null ? ResponseType.MODEL : ResponseType.VIEW;
     }
 
     /**

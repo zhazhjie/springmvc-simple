@@ -1,6 +1,11 @@
 package com.zzj.core.dispatch;
 
-import javax.servlet.http.HttpServlet;
+public class ErrorHandler {
+    public static void run(){
+        try {
 
-public class ErrorHandler extends HttpServlet {
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+    };
 }
