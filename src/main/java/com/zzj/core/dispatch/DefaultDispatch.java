@@ -33,7 +33,7 @@ public class DefaultDispatch extends HttpServlet {
     private Properties properties = new Properties();
     private Map<Class, Object> ioc = new HashMap<>();
     private Map<String, MethodHandler> methodHandlers = new HashMap<>();
-    private Object exceptionHandlerInstance = null;
+    private Object controllerExceptionHandlerInstance = null;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -74,17 +74,17 @@ public class DefaultDispatch extends HttpServlet {
      */
     private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         if (!requestPreCheck(req, resp)) return;
-        exceptionHandler(req,resp,()->{
+        controllerExceptionHandler(req, resp, () -> {
             String requestURI = req.getRequestURI();
             MethodHandler methodHandler = methodHandlers.get(requestURI);
             Method method = methodHandler.getMethod();
 //            try {
-                //填充参数
-                Object[] args = fillParams(method.getParameters(), req, resp);
-                //调用对应controller
-                Object invoke = method.invoke(methodHandler.getInstance(), args);
-                //响应请求
-                sendResponse(req,resp,methodHandler.getResponseType(),invoke);
+            //填充参数
+            Object[] args = fillParams(method.getParameters(), req, resp);
+            //调用对应controller
+            Object invoke = method.invoke(methodHandler.getInstance(), args);
+            //响应请求
+            sendResponse(req, resp, methodHandler.getResponseType(), invoke);
 //            } catch (Exception e) {
 //                e.printStackTrace();
 //            }
@@ -92,37 +92,35 @@ public class DefaultDispatch extends HttpServlet {
 
     }
 
-    private void exceptionHandler(HttpServletRequest req, HttpServletResponse resp,ControllerExecutor controllerExecutor){
+    private void controllerExceptionHandler(HttpServletRequest req, HttpServletResponse resp, ControllerExecutor controllerExecutor) {
         try {
             controllerExecutor.run();
-        }catch (Exception e){
-            if(exceptionHandlerInstance==null){
+        } catch (InvocationTargetException e) {
+            if (controllerExceptionHandlerInstance == null) {
                 e.printStackTrace();
-            }else{
-                Class<?> clazz = exceptionHandlerInstance.getClass();
+            } else {
+                Class<?> clazz = controllerExceptionHandlerInstance.getClass();
                 Method[] declaredMethods = clazz.getDeclaredMethods();
                 for (Method declaredMethod : declaredMethods) {
                     ExceptionHandler exceptionHandler = declaredMethod.getAnnotation(ExceptionHandler.class);
-                    Exception targetException=e;
-                    if(targetException instanceof InvocationTargetException){
-                        Throwable targetException1 = ((InvocationTargetException) e).getTargetException();
-
-                    };
-                    if(exceptionHandler!=null&&exceptionHandler.value()==e.getClass()){
+                    Throwable targetException = e.getTargetException();
+                    if (exceptionHandler != null && exceptionHandler.value() == targetException.getClass()) {
                         try {
-                            Object invoke = declaredMethod.invoke(exceptionHandlerInstance, e);
-                            ResponseType responseType=declaredMethod.isAnnotationPresent(ResponseBody.class)?ResponseType.MODEL:ResponseType.VIEW;
-                            sendResponse(req,resp,responseType,invoke);
-                        }catch (Exception ex){
+                            Object invoke = declaredMethod.invoke(controllerExceptionHandlerInstance, targetException);
+                            ResponseType responseType = declaredMethod.isAnnotationPresent(ResponseBody.class) ? ResponseType.MODEL : ResponseType.VIEW;
+                            sendResponse(req, resp, responseType, invoke);
+                        } catch (Exception ex) {
                             ex.printStackTrace();
                         }
                     }
                 }
             }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
-    private void sendResponse(HttpServletRequest req, HttpServletResponse resp,ResponseType responseType,Object invoke) throws ServletException, IOException{
+    private void sendResponse(HttpServletRequest req, HttpServletResponse resp, ResponseType responseType, Object invoke) throws ServletException, IOException {
         if (responseType == ResponseType.VIEW) {
             req.getRequestDispatcher(viewPath + invoke.toString() + ".jsp").forward(req, resp);
         } else {
@@ -183,7 +181,7 @@ public class DefaultDispatch extends HttpServlet {
                 }
             } else {
                 RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
-                String paramName = requestParam != null&&!requestParam.value().equals("") ? requestParam.value() : parameter.getName();
+                String paramName = requestParam != null && !requestParam.value().equals("") ? requestParam.value() : parameter.getName();
                 if (paramClazz == HttpServletRequest.class) {
                     args[i] = req;
                 } else if (paramClazz == HttpServletResponse.class) {
@@ -320,8 +318,8 @@ public class DefaultDispatch extends HttpServlet {
                 Arrays.stream(interfaces).forEach(interfaceClazz -> {
                     ioc.put(interfaceClazz, instance);
                 });
-            }else if(controllerAdvice!=null){
-                exceptionHandlerInstance=clazz.getDeclaredConstructor().newInstance();
+            } else if (controllerAdvice != null) {
+                controllerExceptionHandlerInstance = clazz.getDeclaredConstructor().newInstance();
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -343,7 +341,7 @@ public class DefaultDispatch extends HttpServlet {
                         //按类型装配
                         Object bean = ioc.get(type);
                         if (autowired.required() && bean == null) {
-                            throw new WebException("Can not found the bean with type "+type);
+                            throw new WebException("Can not found the bean with type " + type);
                         }
                         field.set(instance, bean);
                     } catch (IllegalAccessException e) {
