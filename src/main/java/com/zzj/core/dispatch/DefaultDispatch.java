@@ -33,7 +33,7 @@ public class DefaultDispatch extends HttpServlet {
     private Properties properties = new Properties();
     private Map<Class, Object> ioc = new HashMap<>();
     private Map<String, MethodHandler> methodHandlers = new HashMap<>();
-    private Object controllerExceptionHandlerInstance = null;
+    private Object controllerAdviceInstance = null;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -96,17 +96,17 @@ public class DefaultDispatch extends HttpServlet {
         try {
             controllerExecutor.run();
         } catch (InvocationTargetException e) {
-            if (controllerExceptionHandlerInstance == null) {
+            if (controllerAdviceInstance == null) {
                 e.printStackTrace();
             } else {
-                Class<?> clazz = controllerExceptionHandlerInstance.getClass();
+                Class<?> clazz = controllerAdviceInstance.getClass();
                 Method[] declaredMethods = clazz.getDeclaredMethods();
                 for (Method declaredMethod : declaredMethods) {
                     ExceptionHandler exceptionHandler = declaredMethod.getAnnotation(ExceptionHandler.class);
                     Throwable targetException = e.getTargetException();
                     if (exceptionHandler != null && exceptionHandler.value() == targetException.getClass()) {
                         try {
-                            Object invoke = declaredMethod.invoke(controllerExceptionHandlerInstance, targetException);
+                            Object invoke = declaredMethod.invoke(controllerAdviceInstance, targetException);
                             ResponseType responseType = declaredMethod.isAnnotationPresent(ResponseBody.class) ? ResponseType.MODEL : ResponseType.VIEW;
                             sendResponse(req, resp, responseType, invoke);
                         } catch (Exception ex) {
@@ -319,7 +319,7 @@ public class DefaultDispatch extends HttpServlet {
                     ioc.put(interfaceClazz, instance);
                 });
             } else if (controllerAdvice != null) {
-                controllerExceptionHandlerInstance = clazz.getDeclaredConstructor().newInstance();
+                controllerAdviceInstance = clazz.getDeclaredConstructor().newInstance();
             }
         } catch (Exception e) {
             e.printStackTrace();
