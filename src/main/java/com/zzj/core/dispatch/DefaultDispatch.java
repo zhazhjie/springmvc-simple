@@ -18,6 +18,7 @@ import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.Target;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.URL;
@@ -27,11 +28,12 @@ import java.util.Map;
 import java.util.Properties;
 
 public class DefaultDispatch extends HttpServlet {
-    private static String PACKAGE_PATH = "";
-    private static String VIEW_PATH = "";
-    private static Properties PROPERTIES = new Properties();
-    private static Map<Class, Object> IOC = new HashMap<>();
-    private static Map<String, MethodHandler> METHOD_HANDLER_MAP = new HashMap<>();
+    private String packagePath = "";
+    private String viewPath = "";
+    private Properties properties = new Properties();
+    private Map<Class, Object> ioc = new HashMap<>();
+    private Map<String, MethodHandler> methodHandlers = new HashMap<>();
+    private Object exceptionHandlerInstance = null;
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -44,10 +46,20 @@ public class DefaultDispatch extends HttpServlet {
     }
 
     @Override
+    protected void doPut(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        doDispatch(req, resp);
+    }
+
+    @Override
+    protected void doDelete(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+        doDispatch(req, resp);
+    }
+
+    @Override
     public void init(ServletConfig config) throws ServletException {
         super.init(config);
         initConfig(config.getInitParameter("appProperties"));
-        scanPackage(PACKAGE_PATH);
+        scanPackage(packagePath);
         doAutowired();
         mappingPathToHandler();
 
@@ -62,23 +74,61 @@ public class DefaultDispatch extends HttpServlet {
      */
     private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         if (!requestPreCheck(req, resp)) return;
-        String requestURI = req.getRequestURI();
-        MethodHandler methodHandler = METHOD_HANDLER_MAP.get(requestURI);
-        Method method = methodHandler.getMethod();
+        exceptionHandler(req,resp,()->{
+            String requestURI = req.getRequestURI();
+            MethodHandler methodHandler = methodHandlers.get(requestURI);
+            Method method = methodHandler.getMethod();
+//            try {
+                //填充参数
+                Object[] args = fillParams(method.getParameters(), req, resp);
+                //调用对应controller
+                Object invoke = method.invoke(methodHandler.getInstance(), args);
+                //响应请求
+                sendResponse(req,resp,methodHandler.getResponseType(),invoke);
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//            }
+        });
+
+    }
+
+    private void exceptionHandler(HttpServletRequest req, HttpServletResponse resp,ControllerExecutor controllerExecutor){
         try {
-            //填充参数
-            Object[] args = fillParams(method.getParameters(), req, resp);
-            //调用对应controller
-            Object invoke = method.invoke(methodHandler.getInstance(), args);
-            if (methodHandler.getResponseType() == ResponseType.VIEW) {
-                req.getRequestDispatcher(VIEW_PATH + invoke.toString() + ".jsp").forward(req, resp);
-            } else {
-                PrintWriter writer = resp.getWriter();
-                writer.print(JSON.toJSONString(invoke));
-                writer.close();
+            controllerExecutor.run();
+        }catch (Exception e){
+            if(exceptionHandlerInstance==null){
+                e.printStackTrace();
+            }else{
+                Class<?> clazz = exceptionHandlerInstance.getClass();
+                Method[] declaredMethods = clazz.getDeclaredMethods();
+                for (Method declaredMethod : declaredMethods) {
+                    ExceptionHandler exceptionHandler = declaredMethod.getAnnotation(ExceptionHandler.class);
+                    Exception targetException=e;
+                    if(targetException instanceof InvocationTargetException){
+                        Throwable targetException1 = ((InvocationTargetException) e).getTargetException();
+
+                    };
+                    if(exceptionHandler!=null&&exceptionHandler.value()==e.getClass()){
+                        try {
+                            Object invoke = declaredMethod.invoke(exceptionHandlerInstance, e);
+                            ResponseType responseType=declaredMethod.isAnnotationPresent(ResponseBody.class)?ResponseType.MODEL:ResponseType.VIEW;
+                            sendResponse(req,resp,responseType,invoke);
+                        }catch (Exception ex){
+                            ex.printStackTrace();
+                        }
+                    }
+                }
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+        }
+    }
+
+    private void sendResponse(HttpServletRequest req, HttpServletResponse resp,ResponseType responseType,Object invoke) throws ServletException, IOException{
+        if (responseType == ResponseType.VIEW) {
+            req.getRequestDispatcher(viewPath + invoke.toString() + ".jsp").forward(req, resp);
+        } else {
+            PrintWriter writer = resp.getWriter();
+            writer.print(JSON.toJSONString(invoke));
+            writer.close();
         }
     }
 
@@ -156,7 +206,7 @@ public class DefaultDispatch extends HttpServlet {
      */
     private boolean requestPreCheck(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         String requestURI = req.getRequestURI();
-        MethodHandler methodHandler = METHOD_HANDLER_MAP.get(requestURI);
+        MethodHandler methodHandler = methodHandlers.get(requestURI);
         //判断请求路径是否有对应的handler
         if (methodHandler == null) {
             resp.sendError(HttpServletResponse.SC_NOT_FOUND, "404 NOT FOUND");
@@ -181,9 +231,9 @@ public class DefaultDispatch extends HttpServlet {
     private void initConfig(String appProperties) {
         try {
             InputStream resourceAsStream = this.getClass().getClassLoader().getResourceAsStream(appProperties);
-            PROPERTIES.load(resourceAsStream);
-            PACKAGE_PATH = PROPERTIES.getProperty("packageName").replaceAll("\\.", "/");
-            VIEW_PATH = PROPERTIES.getProperty("viewPath");
+            properties.load(resourceAsStream);
+            packagePath = properties.getProperty("packageName").replaceAll("\\.", "/");
+            viewPath = properties.getProperty("viewPath");
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -220,7 +270,7 @@ public class DefaultDispatch extends HttpServlet {
      * @param <T>
      * @return
      */
-    private static <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClazz) {
+    private <T extends Annotation> T getAnnotation(Object source, Class<T> annotationClazz) {
         T targetAnnotation = null;
         Annotation[] annotations = new Annotation[]{};
         if (source instanceof Class) {
@@ -259,16 +309,19 @@ public class DefaultDispatch extends HttpServlet {
         try {
             Class<?> clazz = Class.forName(className);
             Component component = getAnnotation(clazz, Component.class);
+            ControllerAdvice controllerAdvice = clazz.getAnnotation(ControllerAdvice.class);
             //包含@Component注解的类实例添加到ico容器
             if (component != null) {
-                Object instance = clazz.newInstance();
+                Object instance = clazz.getDeclaredConstructor().newInstance();
                 //按类型存
-                IOC.put(clazz, instance);
+                ioc.put(clazz, instance);
                 Class<?>[] interfaces = clazz.getInterfaces();
                 //把对应的接口类型也存进去
                 Arrays.stream(interfaces).forEach(interfaceClazz -> {
-                    IOC.put(interfaceClazz, instance);
+                    ioc.put(interfaceClazz, instance);
                 });
+            }else if(controllerAdvice!=null){
+                exceptionHandlerInstance=clazz.getDeclaredConstructor().newInstance();
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -279,7 +332,7 @@ public class DefaultDispatch extends HttpServlet {
      * 执行自动装配
      */
     private void doAutowired() {
-        IOC.forEach((key, instance) -> {
+        ioc.forEach((key, instance) -> {
             Field[] fields = instance.getClass().getDeclaredFields();
             Arrays.stream(fields).forEach(field -> {
                 Autowired autowired = field.getAnnotation(Autowired.class);
@@ -288,7 +341,7 @@ public class DefaultDispatch extends HttpServlet {
                         field.setAccessible(true);
                         Class<?> type = field.getType();
                         //按类型装配
-                        Object bean = IOC.get(type);
+                        Object bean = ioc.get(type);
                         if (autowired.required() && bean == null) {
                             throw new WebException("Can not found the bean with type "+type);
                         }
@@ -305,7 +358,7 @@ public class DefaultDispatch extends HttpServlet {
      * 映射请求路径到具体方法
      */
     private void mappingPathToHandler() {
-        IOC.forEach((key, instance) -> {
+        ioc.forEach((key, instance) -> {
             Class<?> clazz = instance.getClass();
             Controller controller = getAnnotation(clazz, Controller.class);
             if (controller != null) {
@@ -334,7 +387,7 @@ public class DefaultDispatch extends HttpServlet {
         methodHandler.setMethod(method);
         methodHandler.setPath(basePath + getMappingPath(method));
         methodHandler.setResponseType(getResponseType(clazz, method));
-        METHOD_HANDLER_MAP.put(methodHandler.getPath(), methodHandler);
+        methodHandlers.put(methodHandler.getPath(), methodHandler);
     }
 
     /**

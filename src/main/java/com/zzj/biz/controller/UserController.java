@@ -3,6 +3,7 @@ package com.zzj.biz.controller;
 import com.zzj.biz.entity.User;
 import com.zzj.biz.service.UserService;
 import com.zzj.core.annotation.*;
+import com.zzj.core.exception.WebException;
 
 import javax.servlet.http.HttpServletRequest;
 
@@ -16,6 +17,7 @@ public class UserController {
     public User getUserById(Long id, HttpServletRequest request){
         System.out.println("id:"+id);
         User user = userService.getUserById(id);
+        if(1==1) throw new WebException("error");
         return user;
     }
 
