@@ -6,4 +6,5 @@
 * 自动填充参数
 * 支持json和x-www-form-urlencoded
 * 支持返回视图或数据模型
+* controller层异常拦截
 * ...
