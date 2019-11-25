@@ -389,7 +389,7 @@ public class DefaultDispatch extends HttpServlet {
     }
 
     /**
-     * 映射请求路径到具体方法
+     * 映射请求路径到具体handler
      */
     private void mappingPathToHandler() {
         ioc.forEach((key, instance) -> {
