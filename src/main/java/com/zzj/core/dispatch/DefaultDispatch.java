@@ -92,34 +92,70 @@ public class DefaultDispatch extends HttpServlet {
 
     }
 
+    /**
+     * controller层异常拦截
+     *
+     * @param req
+     * @param resp
+     * @param controllerExecutor
+     */
     private void controllerExceptionHandler(HttpServletRequest req, HttpServletResponse resp, ControllerExecutor controllerExecutor) {
         try {
             controllerExecutor.run();
         } catch (InvocationTargetException e) {
+            //InvocationTargetException 捕获反射invoke抛出的异常
             if (controllerAdviceInstance == null) {
                 e.printStackTrace();
             } else {
                 Class<?> clazz = controllerAdviceInstance.getClass();
                 Method[] declaredMethods = clazz.getDeclaredMethods();
+                Method defaultHandler = null;
+                boolean handleFlag = false;
                 for (Method declaredMethod : declaredMethods) {
                     ExceptionHandler exceptionHandler = declaredMethod.getAnnotation(ExceptionHandler.class);
+                    //获取真正的异常类
                     Throwable targetException = e.getTargetException();
+                    //执行对应的ExceptionHandler
                     if (exceptionHandler != null && exceptionHandler.value() == targetException.getClass()) {
                         try {
                             Object invoke = declaredMethod.invoke(controllerAdviceInstance, targetException);
                             ResponseType responseType = declaredMethod.isAnnotationPresent(ResponseBody.class) ? ResponseType.MODEL : ResponseType.VIEW;
                             sendResponse(req, resp, responseType, invoke);
+                            handleFlag = true;
                         } catch (Exception ex) {
                             ex.printStackTrace();
                         }
+                    } else if (exceptionHandler != null && exceptionHandler.value() == Exception.class) {
+                        defaultHandler = declaredMethod;
                     }
                 }
+                //默认异常处理
+                if (!handleFlag && defaultHandler != null) {
+                    try {
+                        Object invoke = defaultHandler.invoke(controllerAdviceInstance, e.getTargetException());
+                        ResponseType responseType = defaultHandler.isAnnotationPresent(ResponseBody.class) ? ResponseType.MODEL : ResponseType.VIEW;
+                        sendResponse(req, resp, responseType, invoke);
+                    } catch (Exception ex) {
+                        ex.printStackTrace();
+                    }
+                }
+
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
+    /**
+     * 响应请求
+     *
+     * @param req
+     * @param resp
+     * @param responseType
+     * @param invoke
+     * @throws ServletException
+     * @throws IOException
+     */
     private void sendResponse(HttpServletRequest req, HttpServletResponse resp, ResponseType responseType, Object invoke) throws ServletException, IOException {
         if (responseType == ResponseType.VIEW) {
             req.getRequestDispatcher(viewPath + invoke.toString() + ".jsp").forward(req, resp);
